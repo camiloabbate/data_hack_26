@@ -18,6 +18,11 @@ p_load(tidyverse, tidylog, janitor, tigris, sf)
 
 options(tigris_use_cache = TRUE)
 
+theme_set(theme_minimal(base_size = 12) + theme(
+  plot.background  = element_rect(fill = "white", color = NA),
+  panel.background = element_rect(fill = "white", color = NA)
+))
+
 load("02_clean_data/ca_county_merged.RData")
 
 
@@ -70,9 +75,10 @@ map1 <- ggplot(ca_map) +
   ) +
   theme_void() +
   theme(
-    plot.title    = element_text(face = "bold", size = 14),
-    plot.subtitle = element_text(size = 11),
-    legend.position = "right"
+    plot.title       = element_text(face = "bold", size = 14),
+    plot.subtitle    = element_text(size = 11),
+    legend.position  = "right",
+    plot.background  = element_rect(fill = "white", color = NA)
   )
 
 map1
@@ -105,8 +111,9 @@ map2 <- ggplot(ca_map_2010) +
   ) +
   theme_void() +
   theme(
-    plot.title    = element_text(face = "bold", size = 14),
-    plot.subtitle = element_text(size = 11)
+    plot.title      = element_text(face = "bold", size = 14),
+    plot.subtitle   = element_text(size = 11),
+    plot.background = element_rect(fill = "white", color = NA)
   )
 
 map2
@@ -121,7 +128,10 @@ ggsave("04_graphs/map_filing_rate_2010.png", map2, width = 7, height = 8, dpi = 
 ts_data <- ca_county_merged %>%
   mutate(group = if_else(coastal == 1, "Coastal", "Inland")) %>%
   group_by(year, group) %>%
-  summarise(mean_rate = mean(filing_rate, na.rm = TRUE), .groups = "drop")
+  summarise(mean_rate = mean(filing_rate, na.rm = TRUE), .groups = "drop") %>%
+  group_by(year) %>%
+  filter(n_distinct(group) == 2) %>%
+  ungroup()
 
 plot_ts <- ggplot(ts_data, aes(x = year, y = mean_rate, color = group)) +
   geom_line(linewidth = 1.1) +
@@ -133,7 +143,7 @@ plot_ts <- ggplot(ts_data, aes(x = year, y = mean_rate, color = group)) +
   scale_x_continuous(breaks = seq(2000, 2018, by = 2)) +
   labs(
     title   = "Eviction Filing Rates: Coastal vs. Inland Counties",
-    subtitle = "California, 2000–2018",
+    subtitle = "California, 2010–2017 (years with data for both groups)",
     x       = NULL,
     y       = "Mean filing rate (% renting HH)",
     color   = NULL,

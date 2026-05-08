@@ -1,0 +1,616 @@
+---
+title: "Eviction in California: A Collaborative Data Analysis"
+subtitle: "DataHack 2026 — In-Class Exercise"
+date: "Spring 2026"
+output:
+  html_document:
+    theme: flatly
+    toc: true
+    toc_float: true
+    toc_depth: 3
+    number_sections: true
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, eval = FALSE)
+```
+
+---
+
+# Overview
+
+In this exercise you will work in **pairs** to analyze eviction filing data across
+California counties (2000–2018), using data from the
+[Eviction Lab](https://evictionlab.org/) at Princeton University.
+
+By the end of class you will have produced:
+
+- A **choropleth map** of eviction rates across all 58 California counties
+- A **time series** comparing coastal vs. inland counties over time
+- **Summary tables** and descriptive statistics by group
+- A simple **OLS regression** estimating differences in eviction rates
+
+You will do this as a real collaboration: two people, one GitHub repository,
+using branches, commits, pushes, and pulls.
+
+---
+
+# GitHub Setup
+
+## Create your pair repository
+
+One student per pair does the following:
+
+1. Go to the course template repository on GitHub
+2. Click **"Use this template" → "Create a new repository"**
+3. Name it something like `eviction-yournames` and set it to **Public**
+4. Once created, go to **Settings → Collaborators** and add your partner
+
+The other student:
+
+1. Accepts the collaborator invitation (check your email)
+2. Clones the repository in RStudio:
+   **File → New Project → Version Control → Git**, paste the repo URL
+
+Both students open the project in RStudio and verify:
+
+```bash
+git status
+# Should say: On branch main
+```
+
+Set your identity if you have not already:
+
+```bash
+git config --global user.name  "Your Name"
+git config --global user.email "your@email.com"
+```
+
+## Create your branch
+
+**Do this before touching any files.**
+
+**Student A — in the RStudio Terminal:**
+```bash
+git checkout -b student-a
+git push -u origin student-a
+```
+
+**Student B — in the RStudio Terminal:**
+```bash
+git checkout -b student-b
+git push -u origin student-b
+```
+
+Check you are on the right branch:
+```bash
+git branch
+# The branch with * is your current branch
+```
+
+---
+
+# The Data
+
+You are working with two files inside `00_raw_data/`:
+
+**File 1 — `county_court-issued_2000_2018.csv`**
+Court-issued eviction filings by county and year. Covers all 58 California counties.
+This is Student A's input file.
+
+```
+state | county | fips_state | fips_county | year | renting_hh | filings_observed | ...
+```
+
+**File 2 — `county_proprietary_valid_2000_2018.csv`**
+Proprietary estimates with pre-computed filing rates, threatened rates, and judgement
+rates. Covers 16 smaller California counties. This is Student B's input file.
+
+```
+cofips | county | state | year | type | filings | filing_rate | threatened_rate | judgement_rate
+```
+
+**Key variable you will compute (Student A):**
+$$\text{filing rate} = \frac{\text{filings observed}}{\text{renting households}} \times 100$$
+
+This is the percentage of renting households that received an eviction filing
+in a given county and year.
+
+---
+
+# Part 1 — Data Cleaning (parallel, ~25 min)
+
+Work independently on your own branch. Open your script and run it
+**section by section** — do not source the whole file at once.
+
+---
+
+## Student A: County court-issued data
+
+Open `01_cleaning_scripts/student_A_county_cleaning.R`.
+
+**Step 1 — Load packages and data:**
+```{r}
+rm(list = ls())
+library(pacman)
+p_load(tidyverse, tidylog, janitor)
+
+county_raw <- read_csv("00_raw_data/county_court-issued_2000_2018.csv")
+glimpse(county_raw)
+```
+
+**Step 2 — Filter to California:**
+```{r}
+ca_county <- county_raw %>%
+  filter(state == "California")
+
+n_distinct(ca_county$county)  # should be 58
+```
+
+**Step 3 — Clean county names and fix FIPS:**
+```{r}
+ca_county <- ca_county %>%
+  mutate(
+    county = str_remove(county, " County"),
+    geoid  = str_pad(as.character(fips_county), width = 5, pad = "0")
+  )
+
+# Verify: all geoids should start with "06"
+unique(ca_county$geoid) %>% head()
+```
+
+**Step 4 — Compute eviction filing rate:**
+```{r}
+ca_county <- ca_county %>%
+  mutate(filing_rate = filings_observed / renting_hh * 100)
+
+summary(ca_county$filing_rate)
+# Values between 0 and 15 are expected (percentage of renting HH)
+```
+
+**Step 5 — Create group indicators:**
+```{r}
+coastal_counties <- c(
+  "Del Norte", "Humboldt", "Mendocino", "Sonoma", "Marin",
+  "San Francisco", "San Mateo", "Santa Cruz", "Monterey",
+  "San Luis Obispo", "Santa Barbara", "Ventura",
+  "Los Angeles", "Orange", "San Diego"
+)
+
+ca_county <- ca_county %>%
+  mutate(
+    coastal  = if_else(county %in% coastal_counties, 1L, 0L),
+    post2008 = if_else(year >= 2008, 1, 0)
+  )
+
+ca_county %>% count(coastal)
+```
+
+**Step 6 — Save:**
+```{r}
+save(ca_county, file = "02_clean_data/ca_county_evictions.RData")
+```
+
+✅ **Commit and push:**
+```bash
+git add 02_clean_data/ca_county_evictions.RData
+git commit -m "Student A: clean county court-issued data for California"
+git push origin student-a
+```
+
+---
+
+## Student B: County proprietary data
+
+Open `01_cleaning_scripts/student_B_county_cleaning.R`.
+
+**Step 1 — Load packages and data:**
+```{r}
+rm(list = ls())
+library(pacman)
+p_load(tidyverse, tidylog, janitor)
+
+prop_raw <- read_csv("00_raw_data/county_proprietary_valid_2000_2018.csv")
+glimpse(prop_raw)
+```
+
+**Step 2 — Filter to California, keep only observed rows:**
+```{r}
+ca_prop <- prop_raw %>%
+  filter(state == "California") %>%
+  filter(type == "observed")
+
+nrow(ca_prop)           # 123 rows
+n_distinct(ca_prop$county)  # 16 counties
+```
+
+> **Why only 16 counties?** The Eviction Lab's proprietary data has valid
+> court records for only 16 small rural California counties. The remaining
+> 42 counties (including LA, SF, etc.) will come from Student A's file.
+
+**Step 3 — Clean names and FIPS:**
+```{r}
+ca_prop <- ca_prop %>%
+  mutate(
+    county = str_remove(county, " County"),
+    geoid  = str_pad(as.character(cofips), width = 5, pad = "0")
+  )
+```
+
+**Step 4 — Select and rename columns:**
+```{r}
+# Rename filing_rate → filing_rate_prop to avoid clash when merging with Student A
+ca_prop_clean <- ca_prop %>%
+  select(
+    geoid,
+    county,
+    year,
+    filing_rate_prop = filing_rate,
+    threatened_rate,
+    judgement_rate
+  )
+
+glimpse(ca_prop_clean)
+```
+
+**Step 5 — Save:**
+```{r}
+save(ca_prop_clean, file = "02_clean_data/ca_prop_clean.RData")
+```
+
+✅ **Commit and push:**
+```bash
+git add 02_clean_data/ca_prop_clean.RData
+git commit -m "Student B: clean proprietary county data for California"
+git push origin student-b
+```
+
+---
+
+## Sync: merge both branches into main
+
+Both cleaned files need to be on `main` before the merge script can run.
+**Do this together.**
+
+**Student A goes first:**
+```bash
+git checkout main
+git merge student-a
+git push origin main
+```
+
+**Student B — pull first, then merge:**
+```bash
+git checkout main
+git pull origin main
+git merge student-b
+git push origin main
+```
+
+Both students pull the updated main:
+```bash
+git pull origin main
+```
+
+Verify both files exist:
+```bash
+ls 02_clean_data/
+# ca_county_evictions.RData
+# ca_prop_clean.RData
+```
+
+---
+
+# Part 2 — Merge (~10 min)
+
+**One student** runs `03_analysis_scripts/00_merge.R`.
+
+This script loads both cleaned files and joins them:
+
+```{r}
+load("02_clean_data/ca_county_evictions.RData")  # ca_county (477 rows)
+load("02_clean_data/ca_prop_clean.RData")         # ca_prop_clean (123 rows)
+
+ca_county_merged <- ca_county %>%
+  left_join(
+    ca_prop_clean %>% select(-county),
+    by = c("geoid", "year")
+  )
+
+# How many rows matched?
+ca_county_merged %>%
+  summarise(
+    total_rows    = n(),
+    has_prop_rate = sum(!is.na(filing_rate_prop)),
+    has_judgement = sum(!is.na(judgement_rate))
+  )
+```
+
+> The left join keeps all 477 rows from Student A. Only ~55 rows will match
+> with Student B's file (the 16 rural counties). That is expected — the main
+> analysis variables (`filing_rate`, `coastal`, `post2008`) are complete
+> for all 58 counties.
+
+```{r}
+save(ca_county_merged, file = "02_clean_data/ca_county_merged.RData")
+```
+
+✅ **Commit and push:**
+```bash
+git add 02_clean_data/ca_county_merged.RData
+git commit -m "merge Student A and B outputs into ca_county_merged"
+git push origin main
+```
+
+The other student pulls:
+```bash
+git pull origin main
+```
+
+---
+
+# Part 3 — Analysis (parallel, ~30 min)
+
+Switch back to your branch and bring in the merged data:
+
+**Student A:**
+```bash
+git checkout student-a
+git merge main
+```
+
+**Student B:**
+```bash
+git checkout student-b
+git merge main
+```
+
+---
+
+## Student A: Maps and graphs
+
+Open `03_analysis_scripts/student_A_maps_graphs.R`.
+
+**Step 1 — Load data and get California county geometries:**
+```{r}
+library(pacman)
+p_load(tidyverse, tidylog, janitor, tigris, sf)
+options(tigris_use_cache = TRUE)
+
+load("02_clean_data/ca_county_merged.RData")
+
+# Download Census county boundaries (takes ~10 sec first time, then cached)
+ca_sf <- counties(state = "CA", cb = TRUE, year = 2018, progress_bar = FALSE)
+
+# GEOID in ca_sf matches our geoid column ("06001" format)
+head(ca_sf$GEOID)
+```
+
+**Step 2 — Compute county averages and join geometry:**
+```{r}
+ca_avg <- ca_county_merged %>%
+  group_by(geoid, county, coastal) %>%
+  summarise(avg_filing_rate = mean(filing_rate, na.rm = TRUE), .groups = "drop")
+
+ca_map <- ca_sf %>%
+  left_join(ca_avg, by = c("GEOID" = "geoid"))
+```
+
+**Step 3 — Map 1: average filing rate across all years:**
+```{r}
+ggplot(ca_map) +
+  geom_sf(aes(fill = avg_filing_rate), color = "white", linewidth = 0.2) +
+  scale_fill_viridis_c(name = "Avg filing rate\n(% renting HH)",
+                       option = "magma", direction = -1) +
+  labs(title = "Average Eviction Filing Rate by County",
+       subtitle = "California, 2010–2017",
+       caption = "Source: Eviction Lab") +
+  theme_void() +
+  theme(plot.background = element_rect(fill = "white", color = NA))
+
+ggsave("04_graphs/map_avg_filing_rate.png", width = 7, height = 8, dpi = 150)
+```
+
+**Step 4 — Map 2: filing rate in 2010:**
+```{r}
+ca_map_2010 <- ca_sf %>%
+  left_join(
+    ca_county_merged %>% filter(year == 2010) %>% select(geoid, filing_rate),
+    by = c("GEOID" = "geoid")
+  )
+
+ggplot(ca_map_2010) +
+  geom_sf(aes(fill = filing_rate), color = "white", linewidth = 0.2) +
+  scale_fill_viridis_c(name = "Filing rate\n(% renting HH)",
+                       option = "magma", direction = -1) +
+  labs(title = "Eviction Filing Rate by County, 2010",
+       subtitle = "California — one year after the housing crisis",
+       caption = "Source: Eviction Lab") +
+  theme_void() +
+  theme(plot.background = element_rect(fill = "white", color = NA))
+
+ggsave("04_graphs/map_filing_rate_2010.png", width = 7, height = 8, dpi = 150)
+```
+
+**Step 5 — Time series: coastal vs. inland:**
+```{r}
+ts_data <- ca_county_merged %>%
+  mutate(group = if_else(coastal == 1, "Coastal", "Inland")) %>%
+  group_by(year, group) %>%
+  summarise(mean_rate = mean(filing_rate, na.rm = TRUE), .groups = "drop") %>%
+  group_by(year) %>%
+  filter(n_distinct(group) == 2) %>%   # only years where BOTH groups have data
+  ungroup()
+
+ggplot(ts_data, aes(x = year, y = mean_rate, color = group)) +
+  geom_line(linewidth = 1.1) +
+  geom_point(size = 2) +
+  geom_vline(xintercept = 2008, linetype = "dashed", color = "gray40") +
+  scale_color_manual(values = c("Coastal" = "#2166ac", "Inland" = "#d6604d")) +
+  labs(title = "Eviction Filing Rates: Coastal vs. Inland Counties",
+       subtitle = "California, 2010–2017",
+       x = NULL, y = "Mean filing rate (% renting HH)", color = NULL,
+       caption = "Source: Eviction Lab") +
+  theme_minimal() +
+  theme(plot.background = element_rect(fill = "white", color = NA))
+
+ggsave("04_graphs/timeseries_coastal_inland.png", width = 8, height = 5, dpi = 150)
+```
+
+**Step 6 — Bar chart: top 10 counties:**
+```{r}
+top10 <- ca_avg %>%
+  slice_max(avg_filing_rate, n = 10) %>%
+  mutate(county = fct_reorder(county, avg_filing_rate),
+         group  = if_else(coastal == 1, "Coastal", "Inland"))
+
+ggplot(top10, aes(x = avg_filing_rate, y = county, fill = group)) +
+  geom_col() +
+  scale_fill_manual(values = c("Coastal" = "#2166ac", "Inland" = "#d6604d")) +
+  labs(title = "Top 10 Counties by Average Eviction Filing Rate",
+       subtitle = "California, 2010–2017",
+       x = "Average filing rate (% renting HH)", y = NULL, fill = NULL,
+       caption = "Source: Eviction Lab") +
+  theme_minimal() +
+  theme(plot.background = element_rect(fill = "white", color = NA))
+
+ggsave("04_graphs/top10_counties.png", width = 7, height = 5, dpi = 150)
+```
+
+✅ **Commit and push:**
+```bash
+git add 04_graphs/
+git commit -m "Student A: maps and graphs for CA eviction data"
+git push origin student-a
+```
+
+---
+
+## Student B: Tables and regression
+
+Open `03_analysis_scripts/student_B_tables_regression.R`.
+
+**Step 1 — Load data:**
+```{r}
+library(pacman)
+p_load(tidyverse, tidylog, janitor, modelsummary)
+
+load("02_clean_data/ca_county_merged.RData")
+```
+
+**Step 2 — Summary statistics table:**
+```{r}
+summary_stats <- ca_county_merged %>%
+  select(filing_rate, filings_observed, renting_hh, coastal, post2008) %>%
+  summarise(across(everything(),
+    list(mean = ~mean(.x, na.rm = TRUE), sd = ~sd(.x, na.rm = TRUE),
+         min  = ~min(.x,  na.rm = TRUE), max = ~max(.x, na.rm = TRUE)),
+    .names = "{.col}__{.fn}")) %>%
+  pivot_longer(everything(), names_to = c("variable", "stat"), names_sep = "__") %>%
+  pivot_wider(names_from = stat, values_from = value)
+
+print(summary_stats)
+write_csv(summary_stats, "05_tables/table_summary_stats.csv")
+```
+
+**Step 3 — Mean filing rate by group:**
+```{r}
+means_by_group <- ca_county_merged %>%
+  mutate(group  = if_else(coastal  == 1, "Coastal",   "Inland"),
+         period = if_else(post2008 == 1, "Post-2008", "Pre-2008")) %>%
+  group_by(group, period) %>%
+  summarise(mean_rate = mean(filing_rate, na.rm = TRUE),
+            sd_rate   = sd(filing_rate,   na.rm = TRUE),
+            n_obs     = n(), .groups = "drop")
+
+print(means_by_group)
+write_csv(means_by_group, "05_tables/table_means_by_group.csv")
+```
+
+**Step 4 — T-test: are coastal and inland rates significantly different?**
+```{r}
+t.test(
+  ca_county_merged %>% filter(coastal == 1) %>% pull(filing_rate),
+  ca_county_merged %>% filter(coastal == 0) %>% pull(filing_rate)
+)
+```
+
+**Step 5 — OLS regression (three models):**
+```{r}
+m1 <- lm(filing_rate ~ coastal,            data = ca_county_merged)
+m2 <- lm(filing_rate ~ coastal + post2008, data = ca_county_merged)
+m3 <- lm(filing_rate ~ coastal * post2008, data = ca_county_merged)
+
+# Model 1: raw coastal gap
+# Model 2: controlling for the time period
+# Model 3: interaction — did the 2008 crisis affect coastal and inland differently?
+
+modelsummary(
+  list("Model 1" = m1, "Model 2" = m2, "Model 3" = m3),
+  stars       = TRUE,
+  gof_map     = c("nobs", "r.squared", "adj.r.squared"),
+  coef_rename = c("coastal"          = "Coastal county",
+                  "post2008"         = "Post-2008",
+                  "coastal:post2008" = "Coastal × Post-2008"),
+  title = "OLS: Eviction Filing Rate",
+  notes = "Source: Eviction Lab. Unit of observation: county-year."
+)
+```
+
+**Step 6 — Save regression output:**
+```{r}
+sink("05_tables/table_regression.txt")
+modelsummary(list("Model 1" = m1, "Model 2" = m2, "Model 3" = m3), stars = TRUE)
+sink()
+```
+
+✅ **Commit and push:**
+```bash
+git add 05_tables/
+git commit -m "Student B: summary tables and regression"
+git push origin student-b
+```
+
+---
+
+# Part 4 — Final merge (~5 min)
+
+Bring everything together on `main`.
+
+**Student A:**
+```bash
+git checkout main
+git merge student-a
+git push origin main
+```
+
+**Student B — pull first:**
+```bash
+git checkout main
+git pull origin main
+git merge student-b
+git push origin main
+```
+
+Check the full commit history:
+```bash
+git log --oneline
+```
+
+You should see commits from both students across cleaning, merging, and analysis.
+
+---
+
+# Checklist
+
+- [ ] `02_clean_data/ca_county_evictions.RData` — Student A cleaning ✓
+- [ ] `02_clean_data/ca_prop_clean.RData` — Student B cleaning ✓
+- [ ] `02_clean_data/ca_county_merged.RData` — merge step ✓
+- [ ] `04_graphs/` — 4 `.png` files from Student A ✓
+- [ ] `05_tables/` — 3 output files from Student B ✓
+- [ ] Both students have commits visible in `git log --oneline` ✓
+- [ ] `main` is up to date with all work merged in ✓
+
+---
+
+*Data source: Eviction Lab, Princeton University. [evictionlab.org](https://evictionlab.org/)*
