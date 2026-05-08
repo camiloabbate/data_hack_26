@@ -2,14 +2,18 @@
 # Student A: County-Level Eviction Data Cleaning
 # =============================================================================
 # Input:  00_raw_data/county_court-issued_2000_2018.csv
-# Output: 02_clean_data/ca_county_evictions.csv
+# Output: 02_clean_data/ca_county_evictions.RData
 #
 # Your job: clean and prepare county-level eviction data for California.
 # Your cleaned file will be used later for time series plots, summary tables,
 # and regressions. Student B is working in parallel on tract-level data.
 # =============================================================================
 
-library(tidyverse)
+rm(list = ls())
+
+library(pacman)
+
+p_load(tidyverse, tidylog,janitor)
 
 # -----------------------------------------------------------------------------
 # 1. Load the raw data
@@ -27,10 +31,10 @@ glimpse(county_raw)
 
 # TASK: Keep only rows where state == "California"
 ca_county <- county_raw %>%
-  filter(_____________)
+  filter(state == "California")
 
-# How many rows did you keep? How many unique counties?
-nrow(ca_county)
+# How many unique counties?
+#nrow(ca_county)
 n_distinct(ca_county$county)
 
 
@@ -40,13 +44,13 @@ n_distinct(ca_county$county)
 
 # The county column contains values like "Los Angeles County".
 # Remove the word " County" so it just says "Los Angeles".
-# Hint: use str_remove()
+
 
 ca_county <- ca_county %>%
-  mutate(county = str_remove(county, _____________))
+  mutate(county = str_remove(county, " County"))
 
 # Check it worked
-head(ca_county$county)
+unique(ca_county$county)
 
 
 # -----------------------------------------------------------------------------
@@ -61,8 +65,8 @@ ca_county <- ca_county %>%
   mutate(geoid = str_pad(as.character(fips_county), width = 5, pad = "0"))
 
 # Verify: all values should start with "06"
-head(ca_county$geoid)
-stopifnot(all(str_starts(ca_county$geoid, "06")))
+unique(ca_county$geoid)
+
 
 
 # -----------------------------------------------------------------------------
@@ -74,7 +78,7 @@ stopifnot(all(str_starts(ca_county$geoid, "06")))
 # Some rows have missing filings_observed — leave those as NA for now.
 
 ca_county <- ca_county %>%
-  mutate(filing_rate = _____________)
+  mutate(filing_rate = filings_observed / renting_hh * 100)
 
 # Sanity check: what is the range of filing_rate?
 summary(ca_county$filing_rate)
@@ -97,7 +101,7 @@ coastal_counties <- c(
 ca_county <- ca_county %>%
   mutate(coastal = if_else(county %in% coastal_counties, 1L, 0L))
 
-# How many county-year rows are coastal vs. inland?
+
 ca_county %>% count(coastal)
 
 
@@ -109,34 +113,13 @@ ca_county %>% count(coastal)
 # and after 2008 (2008 itself is coded as "post").
 
 ca_county <- ca_county %>%
-  mutate(post2008 = if_else(year >= 2008, 1L, 0L))
+  mutate(post2008 = if_else(year >= 2008, 1, 0))
 
 
 # -----------------------------------------------------------------------------
-# 8. Select and reorder final columns
+# 8. Save to 02_clean_data, save as RData
 # -----------------------------------------------------------------------------
 
-ca_county_clean <- ca_county %>%
-  select(
-    geoid,
-    county,
-    year,
-    renting_hh,
-    filings_observed,
-    hh_threat_observed,
-    filing_rate,
-    coastal,
-    post2008
-  ) %>%
-  arrange(county, year)
-
-glimpse(ca_county_clean)
+save(ca_county, file = "02_clean_data/ca_county_evictions.RData")
 
 
-# -----------------------------------------------------------------------------
-# 9. Save to 02_clean_data
-# -----------------------------------------------------------------------------
-
-write_csv(ca_county_clean, "02_clean_data/ca_county_evictions.csv")
-
-message("Done! Saved ca_county_evictions.csv with ", nrow(ca_county_clean), " rows.")
